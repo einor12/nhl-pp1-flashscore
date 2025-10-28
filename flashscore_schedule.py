@@ -22,6 +22,37 @@ from bs4 import BeautifulSoup
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 DEFAULT_TZ = "Europe/Helsinki"
+
+def mmss_to_seconds(s: str) -> int:
+    """
+    Muuntaa merkkijonon 'MM:SS' kokonaissekunneiksi.
+    Palauttaa 0 jos arvo puuttuu tai formaatti on väärä.
+    """
+    try:
+        if not s or s in ("", "0", "00:00", "--"):
+            return 0
+        parts = str(s).strip().split(":")
+        if len(parts) != 2:
+            return 0
+        m, sec = int(parts[0]), int(parts[1])
+        return max(0, m * 60 + sec)
+    except Exception:
+        return 0
+
+
+def seconds_to_mmss(n: int) -> str:
+    """
+    Muuntaa sekunnit 'MM:SS' -muotoon.
+    """
+    try:
+        n = int(n)
+        if n < 0:
+            n = 0
+        m, s = divmod(n, 60)
+        return f"{m:02d}:{s:02d}"
+    except Exception:
+        return "00:00"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; PP1-Targets/1.0; +https://example.com)"
 }
