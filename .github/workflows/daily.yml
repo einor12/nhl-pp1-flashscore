@@ -2,11 +2,17 @@ name: Daily PP1 Build
 
 on:
   schedule:
-    # 07:05 Europe/Helsinki ≈ 05:05 UTC
+    # Aamuajo 07:05 Europe/Helsinki (UTC 05:05)
     - cron: "5 5 * * *"
+    # Ilta-ajo 21:00 Europe/Helsinki. Kesäaika (UTC+3) = 18:00 UTC, talviaika (UTC+2) = 19:00 UTC.
+    - cron: "0 18 * * *"
+    - cron: "0 19 * * *"
   workflow_dispatch:
+    inputs:
+      date:
+        description: "Override date (YYYY-MM-DD), default = today Europe/Helsinki; 21:00 ajo käyttää huomis-päivän"
+        required: false
 
-# git push data/-kansioon
 permissions:
   contents: write
 
@@ -29,67 +35,98 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
 
-      # Aja skripti, mutta älä kaada jobia – talteen exit-koodi + loki
+      # Päätä, ajetaanko tälle päivälle vai huomiselle
+      - name: Decide target date (today vs tomorrow)
+        id: when
+        run: |
+          NOW_HOUR=$(TZ=Europe/Helsinki date +%H)
+          TODAY=$(TZ=Europe/Helsinki date +%F)
+          TOMORROW=$(TZ=Europe/Helsinki date -d 'tomorrow' +%F)
+
+          # Jos workflow_dispatchissa annettu syöte, käytä sitä
+          if [ -n "${{ inputs.date }}" ]; then
+            echo "date=${{ inputs.date }}" >> $GITHUB_OUTPUT
+            echo "mode=manual" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Ajetaan vain jos on 07 tai 21 paikallista aikaa
+          if [ "$NOW_HOUR" = "07" ]; then
+            echo "date=${TODAY}" >> $GITHUB_OUTPUT
+            echo "mode=morning" >> $GITHUB_OUTPUT
+          elif [ "$NOW_HOUR" = "21" ]; then
+            echo "date=${TOMORROW}" >> $GITHUB_OUTPUT
+            echo "mode=evening" >> $GITHUB_OUTPUT
+          else
+            echo "Not the target hour ($NOW_HOUR). Exiting gracefully."
+            echo "date=${TODAY}" >> $GITHUB_OUTPUT
+            echo "mode=skip" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if not the target hour
+        if: steps.when.outputs.mode == 'skip'
+        run: echo "Skipped (not 07:00 or 21:00 Helsinki time)."
+
       - name: Generate PP1 data (season 2025/2026)
+        if: steps.when.outputs.mode != 'skip'
         id: generate
         run: |
           set +e
-          python nhl_pp1_targets.py --season 20252026 2>&1 | tee /tmp/run.log
+          DATE_ARG="--date ${{ steps.when.outputs.date }}"
+          echo "Running for date: ${{ steps.when.outputs.date }}"
+          python nhl_pp1_targets.py --season 20252026 $DATE_ARG 2>&1 | tee /tmp/run.log
           echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
-          # Älä exit — jatketaan aina seuraaviin steppeihin
 
       - name: Commit & push if changed
+        if: steps.when.outputs.mode != 'skip'
         run: |
           set +e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           if ! git diff --cached --quiet; then
-            git commit -m "daily: update data for $(date +'%Y-%m-%d')"
+            git commit -m "update data for ${{ steps.when.outputs.date }}"
             git push || true
           else
             echo "No changes to commit."
           fi
 
-      # Telegram: teksti-esikatselu + linkit + status (viesti lähtee aina)
       - name: Notify Telegram (preview + links + status)
+        if: steps.when.outputs.mode != 'skip'
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set +e
-          DATE=$(TZ=Europe/Helsinki date +%F)
+          DATE="${{ steps.when.outputs.date }}"
           RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main"
           CSV_URL="${RAW_BASE}/data/nhl_pp1_targets_${DATE}.csv"
           XLSX_URL="${RAW_BASE}/data/nhl_pp1_targets_${DATE}.xlsx"
 
           TMP=/tmp/pp1.csv
-          if curl -s -L -f "$CSV_URL" -o "$TMP"; then
-            PREVIEW=$(head -n 15 "$TMP" | sed 's/\t/ | /g' | sed 's/;/ | /g')
-            STATUS_ICON="✅ OK"
-          else
-            PREVIEW="Ei CSV-dataa saatavilla (ajo valmistuu yleensä klo 07 jälkeen)."
-            STATUS_ICON="⚠️ Info"
-          fi
+          STATUS_ICON="✅ OK"
+          EXTRA=""
 
-          EXIT="${{ steps.generate.outputs.exit_code }}"
-          if [ "$EXIT" != "0" ]; then
-            STATUS_ICON="❌ Failed"
-            TAIL=$(tail -n 15 /tmp/run.log | sed 's/`/\\`/g')
-            EXTRA="\n\`\`\`${TAIL}\`\`\`"
+          if curl -s -L -f "$CSV_URL" -o "$TMP"; then
+            LINES=$(wc -l < "$TMP" | tr -d ' ')
+            if [ "$LINES" -le 1 ]; then
+              PREVIEW="Ei osumia tälle päivälle (ei pelejä / ei TSH-top5 -otteluita / lähde ei palauttanut vielä dataa)."
+              STATUS_ICON="⚠️ Info"
+            else
+              PREVIEW=$(head -n 15 "$TMP" | sed 's/\t/ | /g' | sed 's/;/ | /g')
+            fi
           else
-            EXTRA=""
+            PREVIEW="CSV puuttuu (ajo valmistuu yleensä klo 07 jälkeen)."
+            STATUS_ICON="⚠️ Info"
           fi
 
           BODY="🏒 *NHL PP1 targets ${DATE}*\n\`\`\`${PREVIEW}\`\`\`\n[CSV](${CSV_URL}) | [XLSX](${XLSX_URL})\n\n*Status:* ${STATUS_ICON}${EXTRA}"
 
-          # Lähetä Markdown-viesti (älä kaadu virheisiin)
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d parse_mode="Markdown" \
             --data-urlencode text="${BODY}" || true
 
-      # Merkitse run onnistuneeksi aina
       - name: Force success
         run: echo "Done."
