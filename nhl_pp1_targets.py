@@ -128,30 +128,40 @@ def build_team_name_to_id(teams_meta: List[dict]) -> Tuple[Dict[str, int], Dict[
     return name_to_id, id_to_name
 
 
-def get_top5_tsh(season: str) -> List[dict]:
+def get_top5_tsh(season_id: str):
     """
-    Hakee kauden top-5 timesShorthanded (TSH) joukkueet.
-    Endpoint:
-    https://api.nhl.com/stats/rest/en/team?isAggregate=false&reportType=basic&isGame=false&reportName=teamsummary&cayenneExp=seasonId=SEASONID
+    Hakee kauden top-5 timesShorthanded joukkueet NHL Stats API:sta.
+    Soft-fail: palauttaa [] jos API ei vastaa.
     """
     url = (
-        f"{NHL_API_BASE}/stats/rest/en/team?"
-        "isAggregate=false&reportType=basic&isGame=false&"
-        "reportName=teamsummary&cayenneExp=" + f"seasonId={season}"
+        "https://api.nhl.com/stats/rest/en/team"
+        "?isAggregate=false&reportType=basic&isGame=false"
+        "&reportName=teamsummary"
+        f"&cayenneExp=seasonId={season_id}"
     )
-    data = http_get_json(url)
-    rows = data.get("data", [])
-    # Poimi vain relevantit kentät
-    out = []
+    try:
+        data = http_get_json(url)
+    except Exception as e:
+        print(f"[WARN] NHL stats API ei vastaa TSH-hakuun: {e}", file=sys.stderr)
+        return []
+
+    rows = data.get("data", []) if isinstance(data, dict) else []
+    parsed = []
     for r in rows:
-        out.append({
-            "teamId": int(r.get("teamId")),
-            "teamFullName": r.get("teamFullName"),
-            "timesShorthanded": int(r.get("timesShorthanded", 0)),
-        })
-    # Lajittele TSH desc ja ota top-5
-    out.sort(key=lambda x: x["timesShorthanded"], reverse=True)
-    return out[:5]
+        team_id = r.get("teamId")
+        name = r.get("teamFullName") or r.get("teamName")
+        tsh = r.get("timesShorthanded")
+        if team_id is None or name is None or tsh is None:
+            continue
+        try:
+            tsh = int(tsh)
+        except Exception:
+            continue
+        parsed.append({"teamId": team_id, "teamFullName": name, "timesShorthanded": tsh})
+
+    parsed.sort(key=lambda x: x["timesShorthanded"], reverse=True)
+    return parsed[:5]
+
 
 
 def mmss_to_seconds(mmss: str) -> int:
