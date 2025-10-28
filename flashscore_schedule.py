@@ -93,19 +93,28 @@ def fallback_html_scrape(d: date, tz_name: str) -> List[Game]:
             games.append(Game(home.text.strip(), away.text.strip(), time.text.strip() if time else "?"))
     return games
 
-def get_schedule(d: date, tz_name: str = DEFAULT_TZ) -> List[Game]:
-    """Hakee päivän ottelut Flashscoresta"""
+ddef get_schedule(d: date, tz_name: str = DEFAULT_TZ) -> List[Game]:
+    """Hakee päivän ottelut Flashscoresta; jos tyhjää, käyttää NHL-schedule fallbackia."""
+    # 1) JSON-feed
     try:
         games = try_json_feed(d, tz_name)
         if games:
             return games
     except Exception:
         pass
+    # 2) HTML-scrape
     try:
-        return fallback_html_scrape(d, tz_name)
+        games = fallback_html_scrape(d, tz_name)
+        if games:
+            return games
+    except Exception:
+        pass
+    # 3) NHL virallinen aikataulu (fallback, erityisesti iltaisin huomiselle)
+    try:
+        return nhl_schedule_fallback(d, tz_name)
     except Exception:
         return []
-        # --- NHL schedule fallback (huomisen pelit, jos Flashscore ei vielä julkaise) ---
+
 def nhl_schedule_fallback(d: date, tz_name: str) -> List[Game]:
     """
     Hakee päivän ottelut NHL:n virallisesta schedule-APIsta:
