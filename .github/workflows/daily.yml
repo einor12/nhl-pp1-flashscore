@@ -6,7 +6,7 @@ on:
     - cron: "5 5 * * *"
   workflow_dispatch:
 
-# jotta git push data/-kansioon onnistuu
+# git push data/-kansioon
 permissions:
   contents: write
 
@@ -29,59 +29,67 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
 
-      # Ajetaan skripti, mutta EI kaadeta jobia vaikka se palauttaisi virheen.
-      - name: Generate PP1 data (today, season 2025/2026)
+      # Aja skripti, mutta älä kaada jobia – talteen exit-koodi + loki
+      - name: Generate PP1 data (season 2025/2026)
         id: generate
-        continue-on-error: true
         run: |
-          set -o pipefail
+          set +e
           python nhl_pp1_targets.py --season 20252026 2>&1 | tee /tmp/run.log
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+          # Älä exit — jatketaan aina seuraaviin steppeihin
 
       - name: Commit & push if changed
         run: |
+          set +e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/
           if ! git diff --cached --quiet; then
             git commit -m "daily: update data for $(date +'%Y-%m-%d')"
-            git push
+            git push || true
           else
             echo "No changes to commit."
           fi
 
-      # Lähetä Telegramiin taulukko-esikatselu (jos CSV on olemassa) + linkit + status
+      # Telegram: teksti-esikatselu + linkit + status (viesti lähtee aina)
       - name: Notify Telegram (preview + links + status)
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          set -e
+          set +e
           DATE=$(TZ=Europe/Helsinki date +%F)
           RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main"
           CSV_URL="${RAW_BASE}/data/nhl_pp1_targets_${DATE}.csv"
           XLSX_URL="${RAW_BASE}/data/nhl_pp1_targets_${DATE}.xlsx"
 
           TMP=/tmp/pp1.csv
-          STATUS_ICON="✅ OK"
-          if ! curl -s -L -f "$CSV_URL" -o "$TMP"; then
-            PREVIEW="Ei CSV-dataa saatavilla vielä (ajo yleensä valmis klo 07 jälkeen)."
-            STATUS_ICON="⚠️ Info"
-          else
+          if curl -s -L -f "$CSV_URL" -o "$TMP"; then
             PREVIEW=$(head -n 15 "$TMP" | sed 's/\t/ | /g' | sed 's/;/ | /g')
+            STATUS_ICON="✅ OK"
+          else
+            PREVIEW="Ei CSV-dataa saatavilla (ajo valmistuu yleensä klo 07 jälkeen)."
+            STATUS_ICON="⚠️ Info"
           fi
 
-          if [ "${{ steps.generate.outcome }}" != "success" ]; then
+          EXIT="${{ steps.generate.outputs.exit_code }}"
+          if [ "$EXIT" != "0" ]; then
             STATUS_ICON="❌ Failed"
-            LOGTAIL=$(tail -n 15 /tmp/run.log | sed 's/`/\\`/g')
-            EXTRA="\n\`\`\`${LOGTAIL}\`\`\`"
+            TAIL=$(tail -n 15 /tmp/run.log | sed 's/`/\\`/g')
+            EXTRA="\n\`\`\`${TAIL}\`\`\`"
           else
             EXTRA=""
           fi
 
           BODY="🏒 *NHL PP1 targets ${DATE}*\n\`\`\`${PREVIEW}\`\`\`\n[CSV](${CSV_URL}) | [XLSX](${XLSX_URL})\n\n*Status:* ${STATUS_ICON}${EXTRA}"
 
+          # Lähetä Markdown-viesti (älä kaadu virheisiin)
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d parse_mode="Markdown" \
-            --data-urlencode text="${BODY}" > /dev/null
+            --data-urlencode text="${BODY}" || true
+
+      # Merkitse run onnistuneeksi aina
+      - name: Force success
+        run: echo "Done."
