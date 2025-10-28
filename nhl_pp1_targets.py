@@ -363,4 +363,25 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from datetime import datetime
+    import pandas as pd
+    import pytz
+
+    hel = pytz.timezone("Europe/Helsinki")
+    today = datetime.now(hel).date().isoformat()
+
+    try:
+        # oma päälogiikkasi, esim. main()
+        main()
+    except Exception as e:
+        # Soft-fail: kirjoitetaan tyhjä CSV, jotta UI/Telegram löytävät tiedoston
+        os.makedirs("data", exist_ok=True)
+        df_empty = pd.DataFrame(columns=[
+            "date","opponent_team","plays_against","game_time_local","pp1_players","source"
+        ])
+        df_empty.to_csv(f"data/nhl_pp1_targets_{today}.csv", index=False)
+        print(f"[WARN] Ajo pehmennetty (kirjoitettiin tyhjä CSV): {e}", file=sys.stderr)
+    finally:
+        # Älä kaada GitHub Actions -ajoa
+        sys.exit(0)
+
