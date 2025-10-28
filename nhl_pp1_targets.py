@@ -28,6 +28,19 @@ from dateutil import tz
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from flashscore_schedule import get_schedule, Game, seconds_to_mmss
+# HTTP asetukset
+HEADERS = {"User-Agent": "NHL-PP1/1.0 (+github.com/einor12/nhl-pp1-flashscore)"}
+TIMEOUT = 20
+
+from tenacity import retry, stop_after_attempt, wait_exponential
+import requests, sys, os
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6))
+def http_get_json(url: str):
+    r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+    r.raise_for_status()
+    return r.json()
+
 
 # -------------------------------
 # Vakioita (muokkaa turvallisesti)
