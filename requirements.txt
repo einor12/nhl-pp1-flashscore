@@ -1,0 +1,9 @@
+requests
+pandas>=2.0.0
+openpyxl
+python-dateutil
+pytz
+tenacity
+beautifulsoup4
+lxml
+streamlit
