@@ -105,3 +105,48 @@ def get_schedule(d: date, tz_name: str = DEFAULT_TZ) -> List[Game]:
         return fallback_html_scrape(d, tz_name)
     except Exception:
         return []
+        # --- NHL schedule fallback (huomisen pelit, jos Flashscore ei vielä julkaise) ---
+def nhl_schedule_fallback(d: date, tz_name: str) -> List[Game]:
+    """
+    Hakee päivän ottelut NHL:n virallisesta schedule-APIsta:
+    https://api-web.nhle.com/v1/schedule/YYYY-MM-DD
+    Palauttaa listan Game-olioita. Käytetään vain, jos Flashscore ei anna dataa.
+    """
+    import pytz
+    from datetime import datetime
+
+    url = f"https://api-web.nhle.com/v1/schedule/{d.isoformat()}"
+    resp = _get(url)  # käyttää samaa _get():iä (User-Agent + timeout)
+    data = resp.json()
+
+    games = []
+    hel = pytz.timezone("Europe/Helsinki")
+    # Rakenne: {"gameWeek": [{"games":[ ... ]}, ...]}
+    for week in data.get("gameWeek", []):
+        for g in week.get("games", []):
+            try:
+                home_name = (
+                    g.get("homeTeam", {}).get("name", {}).get("default")
+                    or g.get("homeTeam", {}).get("commonName", {}).get("default")
+                    or g.get("homeTeam", {}).get("abbrev")
+                    or "HOME"
+                )
+                away_name = (
+                    g.get("awayTeam", {}).get("name", {}).get("default")
+                    or g.get("awayTeam", {}).get("commonName", {}).get("default")
+                    or g.get("awayTeam", {}).get("abbrev")
+                    or "AWAY"
+                )
+                # startTimeUTC esim. "2025-10-29T23:00:00Z"
+                start_utc = g.get("startTimeUTC") or g.get("startTimeUTCUnix")
+                if isinstance(start_utc, (int, float)):
+                    dt_utc = datetime.utcfromtimestamp(int(start_utc))
+                else:
+                    dt_utc = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
+                time_local = dt_utc.astimezone(hel).strftime("%H:%M")
+                games.append(Game(home=home_name, away=away_name, time_local=time_local))
+            except Exception:
+                continue
+    return games
+# -------------------------------------------------------------------------------
+
